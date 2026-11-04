@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import os
 from tools import TOOLS, run_tool
 from utilites.utility import log
+from types import SimpleNamespace
 
 load_dotenv();
 
@@ -17,12 +18,82 @@ messages.append(
     {
         "role":"system",
         "content":(
-            "Be humble and keep every response under 20 words. "
-            "When asked for the current date or time, call get_current_time "
-            "and use its result; do not guess."
+            "You are a helpful, humble assistant. "
+            "Answer general questions (programming, science, advice) from your own language. "
+            "Use a tool only when the user asks for the current time, the weather, or their city. "
+            "Keep answers under 100 words."
         )
     }
 )
+
+def build_tool_calls_payload(tool_calls):
+    """
+        Converts our collected tool calls into dict format.
+        that the api expects inside the assistant message.
+    """
+    payload = []
+    for tool_call in tool_calls:
+        tool_call_dict = {
+            "id":tool_call.id,
+            "type":"function",
+            "function":{
+                "name":tool_call.function.name,
+                "arguments":tool_call.function.arguments
+            }
+        }
+        payload.append(tool_call_dict)
+    return payload;
+
+def stream_chat(history):
+    streams = client.chat.completions.create(
+                    model=os.getenv("MODEL"),
+                    messages=history,
+                    tools=TOOLS,
+                    tool_choice="auto",
+                    stream=True
+                )
+    full_response = ""
+    calls = {}
+    label_printed = False
+    try:
+        for chunk in streams:
+            if not chunk.choices:
+                continue;
+            delta = chunk.choices[0].delta;
+
+            # Streaming the content::
+            if delta.content:
+                if not label_printed:
+                    print("😊 Assistant: ", end="", flush=True);
+                    label_printed=True;
+                print(delta.content, end="", flush=True);
+                full_response+=delta.content;
+
+            # 2 Tools Calls
+            for tc in (delta.tool_calls or []):
+                obj = calls.setdefault(
+                    tc.index,
+                    SimpleNamespace(id=None, function=SimpleNamespace(name="", arguments=""))
+                )
+
+                if tc.id:
+                    obj.id = tc.id
+                if tc.function and tc.function.name:
+                    obj.function.name+= tc.function.name;
+                if tc.function and tc.function.arguments:
+                    obj.function.arguments+= tc.function.arguments;
+    except KeyboardInterrupt:
+        print();
+        print("Stoped by you")
+        calls ={}
+
+    if label_printed:
+        print();
+
+    calls_list =[]
+    for key in sorted(calls):
+        calls_list.append(calls[key])
+    return full_response, calls_list
 
 while True:
     user_input = input("\nArvind: ")
@@ -37,23 +108,20 @@ while True:
 
     try:
         for step in range(MAX_STEPS):
-            response = client.chat.completions.create(
-                model=os.getenv("MODEL"),
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto"
-            )
+            full_response, tool_calls = stream_chat(messages)
 
-            msg = response.choices[0].message
-
-            if not msg.tool_calls:
+            if not tool_calls:
                 break;
+            
+            log(f"Step {step+1}: model requested {len(tool_calls)} tool calls")
 
-            log(f"Step {step+1}: model requested {len(msg.tool_calls)} tool calls")
+            messages.append({
+                "role":"assistant",
+                "content":full_response,
+                "tool_calls":build_tool_calls_payload(tool_calls)
+            })
 
-            messages.append(msg);   
-
-            for tool_call in msg.tool_calls:
+            for tool_call in tool_calls:
                 result = run_tool(tool_call)
                 messages.append({
                     "role": "tool",
@@ -67,10 +135,5 @@ while True:
                     "content": fallback
             })
             continue
-        messages.append({
-                "role": "assistant",
-                "content": msg.content
-        })
-        print("Assistant:", msg.content or "")
     except Exception as e:
         print("Error:", e)

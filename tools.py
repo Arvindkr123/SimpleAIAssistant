@@ -4,6 +4,7 @@ import os
 import requests
 import json
 from utilites.utility import log
+from rag import search
 load_dotenv();
 
 def get_current_time():
@@ -16,6 +17,25 @@ def get_city_weather(city):
 
 def get_current_city():
     return "sahaswan Uttar Pradesh India"
+
+def search_knowledge_base(query):
+    results = search(query, top_k=2)
+
+    log(f"📚 Knowledge base search: {query}")
+    for r in results:
+        log(f"   {r['score']:.2f} - {r['source']} #{r['chunk_id']}")
+
+    blocks = []
+    for r in results:
+        sourceFileName = r['source']
+        chunkId        = r['chunk_id']
+        chunkText      = r['text']
+
+        header = f"[{sourceFileName} #{chunkId}]"
+        block  = f"{header}\n{chunkText}"
+        blocks.append(block)
+
+    return "\n\n".join(blocks)
 
 TOOLS = [
     {
@@ -58,14 +78,34 @@ TOOLS = [
                 "required": []
             }
         }
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_knowledge_base",
+            "description" : "Searches the Zorvex Technologies company knowledge base: leave, medical, HR, hiring, tech, incident "
+                            "reports and travel expense policies. Use it for any question about company policies or documents. "
+                            "Returns the most relevant passages with their source.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The user's question, rewritten as a short, self-contained search query.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
 FUNCTION_NAME_TO_MAP = {
     "get_current_time": get_current_time,
     "get_city_weather": get_city_weather,
-    "get_current_city": get_current_city
+    "get_current_city": get_current_city,
+    "search_knowledge_base": search_knowledge_base,
 }
 
 
